@@ -1064,7 +1064,8 @@ export class DataService {
         shop_code: code,
         shop_name: orderInfo?.shop_name || '',
         pg_yn: orderInfo?.pg_yn || '',
-        promotion_type: promotionType
+        promotion_type: promotionType,
+        prev_company_name: orderInfo?.prev_company_name || ''
       };
     });
 
