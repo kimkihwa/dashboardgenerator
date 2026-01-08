@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*.*.*'  # v1.0.0, v1.2.3 등의 태그가 push되면 실행
 
+permissions:
+  contents: write  # 릴리즈 생성 권한
+
 jobs:
   release:
     runs-on: ${{ matrix.os }}
