@@ -82,7 +82,7 @@ jobs:
           files: |
             ./dist/macos/**/*
             ./dist/windows/**/*
-          draft: false
+          draft: true
           prerelease: false
           generate_release_notes: true
         env:
