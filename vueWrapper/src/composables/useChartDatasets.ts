@@ -55,6 +55,28 @@ export function useNewRiskDatasets(periodComparison: Ref<PeriodComparison[]>) {
   ]);
 }
 
+// 신규 매장만 차트 데이터셋
+export function useNewShopsDatasets(periodComparison: Ref<PeriodComparison[]>) {
+  return computed(() => [
+    {
+      label: '신규 매장',
+      data: periodComparison.value.map(p => p.newShops),
+      borderColor: '#9b59b6',
+    }
+  ]);
+}
+
+// 리스크 매장만 차트 데이터셋
+export function useRiskShopsDatasets(periodComparison: Ref<PeriodComparison[]>) {
+  return computed(() => [
+    {
+      label: '리스크 매장',
+      data: periodComparison.value.map(p => p.riskShops),
+      borderColor: '#f4212e',
+    }
+  ]);
+}
+
 // 일별 결제 추이 차트 데이터셋
 export function useWeeklyPaymentDatasets(periodComparison: Ref<PeriodComparison[]>) {
   return computed(() => [
@@ -73,7 +95,6 @@ export function useWeeklyPaymentAmountDatasets(periodComparison: Ref<PeriodCompa
       label: '주별 결제금액',
       data: periodComparison.value.map(p => p.weeklyPaymentAmount),
       borderColor: '#17bf63',
-      fill: true,
     }
   ]);
 }

@@ -9,7 +9,10 @@ import {
   useTotalShopDatasets,
   useShopStatusDatasets,
   useNewRiskDatasets,
+  useNewShopsDatasets,
+  useRiskShopsDatasets,
   useWeeklyPaymentDatasets,
+  useWeeklyPaymentAmountDatasets,
   useWeeklyPaymentProviderDatasets,
   useWeeklyPaymentProviderAmountDatasets,
   useCumulativePaymentProviderDatasets,
@@ -17,6 +20,7 @@ import {
   useGrowthRateDatasets,
   usePaymentGrowthDatasets
 } from './composables/useChartDatasets';
+import { useTableSort } from './composables/useTableSort';
 
 // 상태
 const isLoading = ref(false);
@@ -64,21 +68,91 @@ const chartRiskWeeksFilter = ref<number>(4);
 // 프로모션 리스크 매장 등록일 필터 (주 단위) - 기본값 4주
 const promotionRiskWeeksFilter = ref<number>(4);
 
-// 차트용 이용 상태별 매장 등록일 필터 (주 단위) - 기본값 0(전체)
-const chartStatusWeeksFilter = ref<number>(0);
+// 차트용 이용 상태별 매장 등록일 필터 (주 단위) - 기본값 4주
+const chartStatusWeeksFilter = ref<number>(4);
 
 // 대리점 실적 등록일 필터 (주 단위) - 기본값 0(전체)
 const agencyWeeksFilter = ref<number>(0);
 
+// 신규 매장 전환 추적 기간 필터 (주 단위) - 기본값 1주
+const newShopTrackingWeeks = ref<number>(1);
+
 // 확장된 대리점 (매장 목록 표시용)
 const expandedAgency = ref<string | null>(null);
+
+// 대리점 매장 목록 정렬 상태들을 저장
+const agencyShopSortStates = ref<Map<string, { column: string | null; direction: 'asc' | 'desc' | null }>>(new Map());
+
+// 대리점 매장 목록 정렬 함수
+function toggleAgencyShopSort(agencyName: string, column: string) {
+  const currentState = agencyShopSortStates.value.get(agencyName) || { column: null, direction: null };
+  
+  if (currentState.column === column) {
+    if (currentState.direction === null) {
+      currentState.direction = 'asc';
+    } else if (currentState.direction === 'asc') {
+      currentState.direction = 'desc';
+    } else {
+      currentState.direction = null;
+      currentState.column = null;
+    }
+  } else {
+    currentState.column = column;
+    currentState.direction = 'asc';
+  }
+  
+  agencyShopSortStates.value.set(agencyName, { ...currentState });
+}
+
+function getAgencyShopSortIcon(agencyName: string, column: string): string {
+  const state = agencyShopSortStates.value.get(agencyName);
+  if (!state || state.column !== column) return '';
+  if (state.direction === 'asc') return '↑';
+  if (state.direction === 'desc') return '↓';
+  return '';
+}
+
+function getSortedAgencyShops(agency: any) {
+  const state = agencyShopSortStates.value.get(agency.agencyName);
+  if (!state || !state.column || !state.direction) {
+    return agency.shopList;
+  }
+  
+  const shops = [...agency.shopList];
+  const column = state.column;
+  const direction = state.direction;
+  
+  return shops.sort((a: any, b: any) => {
+    let aVal = a[column];
+    let bVal = b[column];
+    
+    if (aVal == null) return 1;
+    if (bVal == null) return -1;
+    
+    if (typeof aVal === 'number' && typeof bVal === 'number') {
+      return direction === 'asc' ? aVal - bVal : bVal - aVal;
+    }
+    
+    const aStr = String(aVal).toLowerCase();
+    const bStr = String(bVal).toLowerCase();
+    
+    if (direction === 'asc') {
+      return aStr.localeCompare(bStr, 'ko-KR');
+    } else {
+      return bStr.localeCompare(aStr, 'ko-KR');
+    }
+  });
+}
 
 // ===== 차트 데이터 (composables) =====
 const chartLabels = useChartLabels(periodComparison);
 const totalShopDatasets = useTotalShopDatasets(periodComparison);
 const shopStatusDatasets = useShopStatusDatasets(periodComparison);
 const newRiskDatasets = useNewRiskDatasets(periodComparison);
+const newShopsDatasets = useNewShopsDatasets(periodComparison);
+const riskShopsDatasets = useRiskShopsDatasets(periodComparison);
 const weeklyPaymentDatasets = useWeeklyPaymentDatasets(periodComparison);
+const weeklyPaymentAmountDatasets = useWeeklyPaymentAmountDatasets(periodComparison);
 const weeklyPaymentProviderDatasets = useWeeklyPaymentProviderDatasets(periodComparison);
 const weeklyPaymentProviderAmountDatasets = useWeeklyPaymentProviderAmountDatasets(periodComparison);
 const cumulativePaymentProviderDatasets = useCumulativePaymentProviderDatasets(periodComparison);
@@ -155,12 +229,19 @@ watch(selectedDate, () => {
   }
 });
 
+// 신규 매장 추적 기간 필터 변경시 업데이트
+watch(newShopTrackingWeeks, () => {
+  if (selectedDate.value) {
+    newShopTracking.value = dataService.trackNewShops(selectedDate.value, newShopTrackingWeeks.value * 7);
+  }
+});
+
 function updateMetrics() {
   if (!selectedDate.value) return;
 
   kpiMetrics.value = dataService.calculateKPIMetrics(selectedDate.value);
   periodComparison.value = dataService.getPeriodComparison();
-  newShopTracking.value = dataService.trackNewShops(selectedDate.value);
+  newShopTracking.value = dataService.trackNewShops(selectedDate.value, newShopTrackingWeeks.value * 7);
   paymentProviderStats.value = dataService.getPaymentProviderStats(selectedDate.value);
 
   // 페이먼트 종합 현황 계산 (이전 날짜와 비교)
@@ -388,6 +469,13 @@ const filteredRiskShops = computed(() => {
   });
 });
 
+// 정렬 기능
+const riskShopsSort = useTableSort(() => filteredRiskShops.value);
+const newShopTrackingSort = useTableSort(() => newShopTracking.value);
+const agencyPerformanceSort = useTableSort(() => filteredAgencyPerformance.value);
+const churnedShopsSort = useTableSort(() => paymentSummary.value?.churnAndRisk.churnedShopList || []);
+const promotionRiskShopsSort = useTableSort(() => filteredPromotionRiskShops.value);
+
 // 프로모션 리스크 매장 등록일 필터링
 const filteredPromotionRiskShops = computed(() => {
   if (!paymentSummary.value) return [];
@@ -439,6 +527,51 @@ const filteredNewRiskDatasets = computed(() => {
       data: periodComparison.value.map(p => p.newShops),
       borderColor: '#9b59b6',
     },
+    {
+      label: `리스크 매장 (${chartRiskWeeksFilter.value}주 이내)`,
+      data: filteredRiskCounts,
+      borderColor: '#f4212e',
+    }
+  ];
+});
+
+// 신규 매장만 필터링된 데이터셋
+const filteredNewShopsDatasets = computed(() => {
+  return [
+    {
+      label: '신규 매장',
+      data: periodComparison.value.map(p => p.newShops),
+      borderColor: '#9b59b6',
+    }
+  ];
+});
+
+// 리스크 매장만 필터링된 데이터셋
+const filteredRiskShopsDatasets = computed(() => {
+  if (chartRiskWeeksFilter.value === 0) {
+    // 필터 없음 - 원본 데이터 사용
+    return riskShopsDatasets.value;
+  }
+
+  // 각 날짜별로 리스크 매장을 등록일 기준으로 필터링
+  const filteredRiskCounts = periodComparison.value.map(p => {
+    const baseDate = dataService.parseDate(p.date);
+    if (!baseDate) return 0;
+
+    const cutoffDate = new Date(baseDate);
+    cutoffDate.setDate(cutoffDate.getDate() - (chartRiskWeeksFilter.value * 7));
+
+    // 해당 날짜의 리스크 매장 리스트 가져오기
+    const riskShops = dataService.findRiskShops(p.date);
+
+    // 등록일 필터 적용
+    return riskShops.filter(shop => {
+      const insDate = dataService.parseInsDatetime(shop.ins_datetime);
+      return insDate && insDate >= cutoffDate;
+    }).length;
+  });
+
+  return [
     {
       label: `리스크 매장 (${chartRiskWeeksFilter.value}주 이내)`,
       data: filteredRiskCounts,
@@ -601,6 +734,60 @@ const calcSolPayActivationRate = computed(() => {
   const total = paymentSummary.value.solPayShops.prepaid.active; // 이용 매장만
   if (total === 0) return 0;
   return ((activated / total) * 100).toFixed(1);
+});
+
+// 카카오페이 선불 활성화율 변화 계산
+const calcPrepaidActivationRateChange = computed(() => {
+  if (!paymentSummary.value) return { change: 0, changeText: '0.0%p' };
+  
+  const currentActivated = paymentSummary.value.kakaoPayActivation.prepaid.activatedShops;
+  const currentTotal = paymentSummary.value.kakaoPayShops.prepaid.active;
+  const currentRate = currentTotal > 0 ? (currentActivated / currentTotal) * 100 : 0;
+  
+  const prevActivated = paymentSummary.value.kakaoPayActivation.weekly.activatedShops.lastWeek;
+  const prevTotal = paymentSummary.value.prevKakaoPayShops.prepaid.active;
+  const prevRate = prevTotal > 0 ? (prevActivated / prevTotal) * 100 : 0;
+  
+  const change = currentRate - prevRate;
+  const changeText = (change >= 0 ? '+' : '') + change.toFixed(1) + '%p';
+  
+  return { change, changeText };
+});
+
+// 카카오페이 후불 활성화율 변화 계산
+const calcPostpaidActivationRateChange = computed(() => {
+  if (!paymentSummary.value) return { change: 0, changeText: '0.0%p' };
+  
+  const currentActivated = paymentSummary.value.kakaoPayActivation.postpaid.activatedShops;
+  const currentTotal = paymentSummary.value.kakaoPayShops.postpaid.active;
+  const currentRate = currentTotal > 0 ? (currentActivated / currentTotal) * 100 : 0;
+  
+  const prevActivated = paymentSummary.value.kakaoPayActivation.weekly.postpaidShops.lastWeek;
+  const prevTotal = paymentSummary.value.prevKakaoPayShops.postpaid.active;
+  const prevRate = prevTotal > 0 ? (prevActivated / prevTotal) * 100 : 0;
+  
+  const change = currentRate - prevRate;
+  const changeText = (change >= 0 ? '+' : '') + change.toFixed(1) + '%p';
+  
+  return { change, changeText };
+});
+
+// 쏠페이 활성화율 변화 계산
+const calcSolPayActivationRateChange = computed(() => {
+  if (!paymentSummary.value) return { change: 0, changeText: '0.0%p' };
+  
+  const currentActivated = paymentSummary.value.solPayActivation.prepaid.solPayShops;
+  const currentTotal = paymentSummary.value.solPayShops.prepaid.active;
+  const currentRate = currentTotal > 0 ? (currentActivated / currentTotal) * 100 : 0;
+  
+  const prevActivated = paymentSummary.value.solPayActivation.weekly.solPayShops.lastWeek;
+  const prevTotal = paymentSummary.value.prevSolPayShops.prepaid.active;
+  const prevRate = prevTotal > 0 ? (prevActivated / prevTotal) * 100 : 0;
+  
+  const change = currentRate - prevRate;
+  const changeText = (change >= 0 ? '+' : '') + change.toFixed(1) + '%p';
+  
+  return { change, changeText };
 });
 
 // HTML 내보내기 핸들러 (Full Export 방식)
@@ -931,7 +1118,7 @@ async function handleExportHTML() {
 
           <div class="chart-section">
             <div class="chart-header">
-              <h3>🆕 신규 & 리스크 매장</h3>
+              <h3>🆕 신규 매장</h3>
               <select v-model="chartRiskWeeksFilter" class="chart-filter">
                 <option :value="0">등록일: 전체</option>
                 <option :value="4">등록일: 4주 이내</option>
@@ -943,18 +1130,27 @@ async function handleExportHTML() {
             </div>
             <TrendChart
               :labels="chartLabels"
-              :datasets="filteredNewRiskDatasets"
-              chartTitle="신규 매장 및 리스크 매장 현황"
+              :datasets="filteredNewShopsDatasets"
+              chartTitle="신규 매장 현황"
             />
           </div>
 
           <div class="chart-section">
-            <h3>📊 변동률 (전 기간 대비)</h3>
+            <div class="chart-header">
+              <h3>⚠️ 리스크 매장</h3>
+              <select v-model="chartRiskWeeksFilter" class="chart-filter">
+                <option :value="0">등록일: 전체</option>
+                <option :value="4">등록일: 4주 이내</option>
+                <option :value="8">등록일: 8주 이내</option>
+                <option :value="12">등록일: 12주 이내</option>
+                <option :value="24">등록일: 24주 이내</option>
+                <option :value="52">등록일: 1년 이내</option>
+              </select>
+            </div>
             <TrendChart
               :labels="chartLabels"
-              :datasets="growthRateDatasets"
-              chartTitle="매장/이용매장 증가율 (%)"
-              yAxisSuffix="%"
+              :datasets="filteredRiskShopsDatasets"
+              chartTitle="리스크 매장 현황"
             />
           </div>
 
@@ -964,6 +1160,15 @@ async function handleExportHTML() {
               :labels="chartLabels"
               :datasets="weeklyPaymentDatasets"
               chartTitle="주차별 결제 건수"
+            />
+          </div>
+
+          <div class="chart-section">
+            <h3>💰 주차별 결제 금액</h3>
+            <TrendChart
+              :labels="chartLabels"
+              :datasets="weeklyPaymentAmountDatasets"
+              chartTitle="주차별 결제 금액"
             />
           </div>
         </div>
@@ -1035,20 +1240,40 @@ async function handleExportHTML() {
             <table>
               <thead>
                 <tr>
-                  <th>매장코드</th>
-                  <th>매장명</th>
-                  <th>유형</th>
-                  <th>등록일</th>
-                  <th>한달 주문</th>
-                  <th>한달 결제</th>
-                  <th>쏠페이</th>
-                  <th>카카오페이</th>
+                  <th @click="riskShopsSort.toggleSort('shop_code')" style="cursor: pointer;">
+                    매장코드 {{ riskShopsSort.getSortIcon('shop_code') }}
+                  </th>
+                  <th @click="riskShopsSort.toggleSort('shop_name')" style="cursor: pointer;">
+                    매장명 {{ riskShopsSort.getSortIcon('shop_name') }}
+                  </th>
+                  <th @click="riskShopsSort.toggleSort('prev_company_name')" style="cursor: pointer;">
+                    담당 대리점 {{ riskShopsSort.getSortIcon('prev_company_name') }}
+                  </th>
+                  <th @click="riskShopsSort.toggleSort('pg_yn')" style="cursor: pointer;">
+                    유형 {{ riskShopsSort.getSortIcon('pg_yn') }}
+                  </th>
+                  <th @click="riskShopsSort.toggleSort('ins_datetime')" style="cursor: pointer;">
+                    등록일 {{ riskShopsSort.getSortIcon('ins_datetime') }}
+                  </th>
+                  <th @click="riskShopsSort.toggleSort('totalOrderCount')" style="cursor: pointer;">
+                    한달 주문 {{ riskShopsSort.getSortIcon('totalOrderCount') }}
+                  </th>
+                  <th @click="riskShopsSort.toggleSort('totalPaymentCount')" style="cursor: pointer;">
+                    한달 결제 {{ riskShopsSort.getSortIcon('totalPaymentCount') }}
+                  </th>
+                  <th @click="riskShopsSort.toggleSort('sol_pay_promotion_yn')" style="cursor: pointer;">
+                    쏠페이 {{ riskShopsSort.getSortIcon('sol_pay_promotion_yn') }}
+                  </th>
+                  <th @click="riskShopsSort.toggleSort('nice_pay_promotion_yn')" style="cursor: pointer;">
+                    카카오페이 {{ riskShopsSort.getSortIcon('nice_pay_promotion_yn') }}
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="shop in filteredRiskShops" :key="shop.shop_code">
+                <tr v-for="shop in riskShopsSort.sortedData.value" :key="shop.shop_code">
                   <td><code>{{ shop.shop_code }}</code></td>
                   <td>{{ shop.shop_name }}</td>
+                  <td>{{ shop.prev_company_name && shop.prev_company_name !== '-' ? shop.prev_company_name : '직영업' }}</td>
                   <td>
                     <span :class="['badge', shop.pg_yn === '선불' ? 'badge-blue' : 'badge-gray']">
                       {{ shop.pg_yn }}
@@ -1088,16 +1313,25 @@ async function handleExportHTML() {
             <div class="hero-icon">🟡</div>
             <div class="hero-content">
               <span class="hero-label">카카오페이 활성화 매장</span>
-              <span class="hero-value">{{ kakaoPayTotalActivatedShops }}개</span>
-              <div class="hero-breakdown">
-                <span class="breakdown-item">선불 {{ paymentSummary.kakaoPayActivation.prepaid.activatedShops }}</span>
-                <span class="breakdown-divider">/</span>
-                <span class="breakdown-item">후불 {{ paymentSummary.kakaoPayActivation.postpaid.activatedShops }}</span>
+              <div style="display: flex; align-items: baseline; gap: 8px;">
+                <span class="hero-value">{{ kakaoPayTotalActivatedShops }}개</span>
+                <span :class="['kpi-change', kakaoPayWeeklyActivatedShopsChange.change >= 0 ? 'positive' : 'negative']">
+                  {{ kakaoPayWeeklyActivatedShopsChange.change >= 0 ? '↑' : '↓' }}{{ Math.abs(kakaoPayWeeklyActivatedShopsChange.change) }} ({{ kakaoPayWeeklyActivatedShopsChange.changeRate }})
+                </span>
               </div>
-              <div class="hero-change" :class="kakaoPayWeeklyActivatedShopsChange.change >= 0 ? 'positive' : 'negative'">
-                <span class="change-arrow">{{ kakaoPayWeeklyActivatedShopsChange.change >= 0 ? '↑' : '↓' }}</span>
-                <span class="change-value">{{ Math.abs(kakaoPayWeeklyActivatedShopsChange.change) }}</span>
-                <span class="change-rate">({{ kakaoPayWeeklyActivatedShopsChange.changeRate }})</span>
+              <div style="margin-top: 8px; font-size: 13px; line-height: 1.6;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <span>선불 <strong>{{ paymentSummary.kakaoPayActivation.prepaid.activatedShops }}</strong></span>
+                  <span v-if="paymentSummary.kakaoPayActivation.weekly.activatedShops.change !== 0" :style="{ color: paymentSummary.kakaoPayActivation.weekly.activatedShops.change >= 0 ? 'var(--accent-green)' : 'var(--accent-red)', fontSize: '11px', fontWeight: '600' }">
+                    {{ paymentSummary.kakaoPayActivation.weekly.activatedShops.change >= 0 ? '↑' : '↓' }}{{ Math.abs(paymentSummary.kakaoPayActivation.weekly.activatedShops.change) }}
+                  </span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+                  <span>후불 <strong>{{ paymentSummary.kakaoPayActivation.postpaid.activatedShops }}</strong></span>
+                  <span v-if="paymentSummary.kakaoPayActivation.weekly.postpaidShops.change !== 0" :style="{ color: paymentSummary.kakaoPayActivation.weekly.postpaidShops.change >= 0 ? 'var(--accent-green)' : 'var(--accent-red)', fontSize: '11px', fontWeight: '600' }">
+                    {{ paymentSummary.kakaoPayActivation.weekly.postpaidShops.change >= 0 ? '↑' : '↓' }}{{ Math.abs(paymentSummary.kakaoPayActivation.weekly.postpaidShops.change) }}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -1107,16 +1341,25 @@ async function handleExportHTML() {
             <div class="hero-icon">📊</div>
             <div class="hero-content">
               <span class="hero-label">카카오페이 결제 건수</span>
-              <span class="hero-value">{{ kakaoPayTotalPaymentCount.toLocaleString() }}건</span>
-              <div class="hero-breakdown">
-                <span class="breakdown-item">선불 {{ paymentSummary.kakaoPayActivation.prepaid.paymentCount.toLocaleString() }}</span>
-                <span class="breakdown-divider">/</span>
-                <span class="breakdown-item">후불 {{ paymentSummary.kakaoPayActivation.postpaid.paymentCount.toLocaleString() }}</span>
+              <div style="display: flex; align-items: baseline; gap: 8px;">
+                <span class="hero-value">{{ kakaoPayTotalPaymentCount.toLocaleString() }}건</span>
+                <span :class="['kpi-change', kakaoPayWeeklyPaymentCountChange.change >= 0 ? 'positive' : 'negative']">
+                  {{ kakaoPayWeeklyPaymentCountChange.change >= 0 ? '↑' : '↓' }}{{ Math.abs(kakaoPayWeeklyPaymentCountChange.change).toLocaleString() }} ({{ kakaoPayWeeklyPaymentCountChange.changeRate }})
+                </span>
               </div>
-              <div class="hero-change" :class="kakaoPayWeeklyPaymentCountChange.change >= 0 ? 'positive' : 'negative'">
-                <span class="change-arrow">{{ kakaoPayWeeklyPaymentCountChange.change >= 0 ? '↑' : '↓' }}</span>
-                <span class="change-value">{{ Math.abs(kakaoPayWeeklyPaymentCountChange.change).toLocaleString() }}</span>
-                <span class="change-rate">({{ kakaoPayWeeklyPaymentCountChange.changeRate }})</span>
+              <div style="margin-top: 8px; font-size: 13px; line-height: 1.6;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <span>선불 <strong>{{ paymentSummary.kakaoPayActivation.prepaid.paymentCount.toLocaleString() }}</strong></span>
+                  <span v-if="paymentSummary.kakaoPayActivation.weekly.paymentCount.change !== 0" :style="{ color: paymentSummary.kakaoPayActivation.weekly.paymentCount.change >= 0 ? 'var(--accent-green)' : 'var(--accent-red)', fontSize: '11px', fontWeight: '600' }">
+                    {{ paymentSummary.kakaoPayActivation.weekly.paymentCount.change >= 0 ? '↑' : '↓' }}{{ Math.abs(paymentSummary.kakaoPayActivation.weekly.paymentCount.change) }}
+                  </span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+                  <span>후불 <strong>{{ paymentSummary.kakaoPayActivation.postpaid.paymentCount.toLocaleString() }}</strong></span>
+                  <span v-if="paymentSummary.kakaoPayActivation.weekly.postpaidOrderCount.change !== 0" :style="{ color: paymentSummary.kakaoPayActivation.weekly.postpaidOrderCount.change >= 0 ? 'var(--accent-green)' : 'var(--accent-red)', fontSize: '11px', fontWeight: '600' }">
+                    {{ paymentSummary.kakaoPayActivation.weekly.postpaidOrderCount.change >= 0 ? '↑' : '↓' }}{{ Math.abs(paymentSummary.kakaoPayActivation.weekly.postpaidOrderCount.change) }}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -1131,11 +1374,19 @@ async function handleExportHTML() {
                   <div style="font-size: 11px; opacity: 0.6; margin-bottom: 4px;">선불</div>
                   <div style="font-size: 24px; font-weight: 600;">{{ calcPrepaidActivationRate }}%</div>
                   <div style="font-size: 12px; opacity: 0.7; margin-top: 2px;">{{ paymentSummary.kakaoPayActivation.prepaid.activatedShops }}/{{ paymentSummary.kakaoPayShops.prepaid.active }}</div>
+                  <div v-if="calcPrepaidActivationRateChange.change !== 0" class="hero-change" :class="calcPrepaidActivationRateChange.change >= 0 ? 'positive' : 'negative'" style="margin-top: 4px; font-size: 12px;">
+                    <span class="change-arrow">{{ calcPrepaidActivationRateChange.change >= 0 ? '↑' : '↓' }}</span>
+                    <span class="change-value">{{ calcPrepaidActivationRateChange.changeText }}</span>
+                  </div>
                 </div>
                 <div style="flex: 1;">
                   <div style="font-size: 11px; opacity: 0.6; margin-bottom: 4px;">후불</div>
                   <div style="font-size: 24px; font-weight: 600;">{{ calcPostpaidActivationRate }}%</div>
                   <div style="font-size: 12px; opacity: 0.7; margin-top: 2px;">{{ paymentSummary.kakaoPayActivation.postpaid.activatedShops }}/{{ paymentSummary.kakaoPayShops.postpaid.active }}</div>
+                  <div v-if="calcPostpaidActivationRateChange.change !== 0" class="hero-change" :class="calcPostpaidActivationRateChange.change >= 0 ? 'positive' : 'negative'" style="margin-top: 4px; font-size: 12px;">
+                    <span class="change-arrow">{{ calcPostpaidActivationRateChange.change >= 0 ? '↑' : '↓' }}</span>
+                    <span class="change-value">{{ calcPostpaidActivationRateChange.changeText }}</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1175,8 +1426,12 @@ async function handleExportHTML() {
             <div class="hero-content">
               <span class="hero-label">쏠페이 활성화율 <span style="font-size: 11px; opacity: 0.5;">(이용 매장 중)</span></span>
               <span class="hero-value">{{ calcSolPayActivationRate }}%</span>
-              <div class="hero-change neutral">
-                <span class="change-value">{{ paymentSummary.solPayActivation.prepaid.solPayShops }} / {{ paymentSummary.solPayShops.prepaid.active }}</span>
+              <div v-if="calcSolPayActivationRateChange.change !== 0" class="hero-change" :class="calcSolPayActivationRateChange.change >= 0 ? 'positive' : 'negative'">
+                <span class="change-arrow">{{ calcSolPayActivationRateChange.change >= 0 ? '↑' : '↓' }}</span>
+                <span class="change-value">{{ calcSolPayActivationRateChange.changeText }}</span>
+              </div>
+              <div style="font-size: 12px; opacity: 0.6; margin-top: 4px;">
+                {{ paymentSummary.solPayActivation.prepaid.solPayShops }} / {{ paymentSummary.solPayShops.prepaid.active }}
               </div>
             </div>
           </div>
@@ -1267,7 +1522,7 @@ async function handleExportHTML() {
             />
           </div>
           <div class="chart-section">
-            <h3>💰 페이먼트 결제 금액 추이</h3>
+            <h3>💰 페이먼트 선불 결제 금액 추이</h3>
             <TrendChart
               :labels="chartLabels"
               :datasets="weeklyPaymentProviderAmountDatasets"
@@ -1458,16 +1713,28 @@ async function handleExportHTML() {
                   <table class="detail-table">
                     <thead>
                       <tr>
-                        <th>매장코드</th>
-                        <th>매장명</th>
-                        <th>선후불</th>
-                        <th>프로모션</th>
+                        <th @click="churnedShopsSort.toggleSort('shop_code')" style="cursor: pointer;">
+                          매장코드 {{ churnedShopsSort.getSortIcon('shop_code') }}
+                        </th>
+                        <th @click="churnedShopsSort.toggleSort('shop_name')" style="cursor: pointer;">
+                          매장명 {{ churnedShopsSort.getSortIcon('shop_name') }}
+                        </th>
+                        <th @click="churnedShopsSort.toggleSort('prev_company_name')" style="cursor: pointer;">
+                          담당 대리점 {{ churnedShopsSort.getSortIcon('prev_company_name') }}
+                        </th>
+                        <th @click="churnedShopsSort.toggleSort('pg_yn')" style="cursor: pointer;">
+                          선후불 {{ churnedShopsSort.getSortIcon('pg_yn') }}
+                        </th>
+                        <th @click="churnedShopsSort.toggleSort('promotion_type')" style="cursor: pointer;">
+                          프로모션 {{ churnedShopsSort.getSortIcon('promotion_type') }}
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      <tr v-for="shop in paymentSummary.churnAndRisk.churnedShopList" :key="shop.shop_code">
+                      <tr v-for="shop in churnedShopsSort.sortedData.value" :key="shop.shop_code">
                         <td><code>{{ shop.shop_code }}</code></td>
                         <td>{{ shop.shop_name }}</td>
+                        <td>{{ shop.prev_company_name && shop.prev_company_name !== '-' ? shop.prev_company_name : '직영업' }}</td>
                         <td>
                           <span :class="['badge', shop.pg_yn === '선불' ? 'badge-blue' : 'badge-gray']">
                             {{ shop.pg_yn }}
@@ -1514,20 +1781,38 @@ async function handleExportHTML() {
                   <table class="detail-table">
                     <thead>
                       <tr>
-                        <th>매장코드</th>
-                        <th>매장명</th>
-                        <th>선후불</th>
+                        <th @click="promotionRiskShopsSort.toggleSort('shop_code')" style="cursor: pointer;">
+                          매장코드 {{ promotionRiskShopsSort.getSortIcon('shop_code') }}
+                        </th>
+                        <th @click="promotionRiskShopsSort.toggleSort('shop_name')" style="cursor: pointer;">
+                          매장명 {{ promotionRiskShopsSort.getSortIcon('shop_name') }}
+                        </th>
+                        <th @click="promotionRiskShopsSort.toggleSort('prev_company_name')" style="cursor: pointer;">
+                          담당 대리점 {{ promotionRiskShopsSort.getSortIcon('prev_company_name') }}
+                        </th>
+                        <th @click="promotionRiskShopsSort.toggleSort('pg_yn')" style="cursor: pointer;">
+                          선후불 {{ promotionRiskShopsSort.getSortIcon('pg_yn') }}
+                        </th>
                         <th>프로모션</th>
-                        <th>등록일</th>
-                        <th>한달 주문</th>
-                        <th>한달 결제</th>
-                        <th>디바이스</th>
+                        <th @click="promotionRiskShopsSort.toggleSort('ins_datetime')" style="cursor: pointer;">
+                          등록일 {{ promotionRiskShopsSort.getSortIcon('ins_datetime') }}
+                        </th>
+                        <th @click="promotionRiskShopsSort.toggleSort('totalOrderCount')" style="cursor: pointer;">
+                          한달 주문 {{ promotionRiskShopsSort.getSortIcon('totalOrderCount') }}
+                        </th>
+                        <th @click="promotionRiskShopsSort.toggleSort('totalPaymentCount')" style="cursor: pointer;">
+                          한달 결제 {{ promotionRiskShopsSort.getSortIcon('totalPaymentCount') }}
+                        </th>
+                        <th @click="promotionRiskShopsSort.toggleSort('deviceCount')" style="cursor: pointer;">
+                          디바이스 {{ promotionRiskShopsSort.getSortIcon('deviceCount') }}
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      <tr v-for="shop in filteredPromotionRiskShops" :key="shop.shop_code">
+                      <tr v-for="shop in promotionRiskShopsSort.sortedData.value" :key="shop.shop_code">
                         <td><code>{{ shop.shop_code }}</code></td>
                         <td>{{ shop.shop_name }}</td>
+                        <td>{{ shop.prev_company_name && shop.prev_company_name !== '-' ? shop.prev_company_name : '직영업' }}</td>
                         <td>
                           <span :class="['badge', shop.pg_yn === '선불' ? 'badge-blue' : 'badge-gray']">
                             {{ shop.pg_yn }}
@@ -1557,8 +1842,20 @@ async function handleExportHTML() {
           <div class="section-header">
             <h2>🆕 신규 매장 전환 추적</h2>
             <p class="section-desc">
-              기준 날짜 상 7일 이내에 추가된 매장들의 이용 전환 현황입니다.
+              기준 날짜 상 지정된 기간 이내에 추가된 매장들의 이용 전환 현황입니다.
             </p>
+          </div>
+
+          <!-- 등록일 필터 -->
+          <div class="filter-bar">
+            <label>등록일 필터:</label>
+            <select v-model="newShopTrackingWeeks">
+              <option :value="1">최근 1주 내 등록</option>
+              <option :value="2">최근 2주 내 등록</option>
+              <option :value="3">최근 3주 내 등록</option>
+              <option :value="4">최근 4주 내 등록</option>
+            </select>
+            <span class="filter-result">필터 결과: {{ newShopTracking.length }}개</span>
           </div>
 
           <div v-if="newShopTracking.length === 0" class="empty-state">
@@ -1569,22 +1866,44 @@ async function handleExportHTML() {
             <table>
               <thead>
                 <tr>
-                  <th>매장코드</th>
-                  <th>매장명</th>
-                  <th>유형</th>
-                  <th>등록일</th>
-                  <th>현재 상태</th>
-                  <th>주문건수</th>
-                  <th>결제건수</th>
-                  <th>결제금액</th>
-                  <th>활동 여부</th>
+                  <th @click="newShopTrackingSort.toggleSort('shop_code')" style="cursor: pointer;">
+                    매장코드 {{ newShopTrackingSort.getSortIcon('shop_code') }}
+                  </th>
+                  <th @click="newShopTrackingSort.toggleSort('shop_name')" style="cursor: pointer;">
+                    매장명 {{ newShopTrackingSort.getSortIcon('shop_name') }}
+                  </th>
+                  <th @click="newShopTrackingSort.toggleSort('prev_company_name')" style="cursor: pointer;">
+                    담당 대리점 {{ newShopTrackingSort.getSortIcon('prev_company_name') }}
+                  </th>
+                  <th @click="newShopTrackingSort.toggleSort('pg_yn')" style="cursor: pointer;">
+                    유형 {{ newShopTrackingSort.getSortIcon('pg_yn') }}
+                  </th>
+                  <th @click="newShopTrackingSort.toggleSort('ins_datetime')" style="cursor: pointer;">
+                    등록일 {{ newShopTrackingSort.getSortIcon('ins_datetime') }}
+                  </th>
+                  <th @click="newShopTrackingSort.toggleSort('currentStatus')" style="cursor: pointer;">
+                    현재 상태 {{ newShopTrackingSort.getSortIcon('currentStatus') }}
+                  </th>
+                  <th @click="newShopTrackingSort.toggleSort('totalOrderCount')" style="cursor: pointer;">
+                    주문건수 {{ newShopTrackingSort.getSortIcon('totalOrderCount') }}
+                  </th>
+                  <th @click="newShopTrackingSort.toggleSort('totalPaymentCount')" style="cursor: pointer;">
+                    결제건수 {{ newShopTrackingSort.getSortIcon('totalPaymentCount') }}
+                  </th>
+                  <th @click="newShopTrackingSort.toggleSort('totalPaymentAmount')" style="cursor: pointer;">
+                    결제금액 {{ newShopTrackingSort.getSortIcon('totalPaymentAmount') }}
+                  </th>
+                  <th @click="newShopTrackingSort.toggleSort('hasActivity')" style="cursor: pointer;">
+                    활동 여부 {{ newShopTrackingSort.getSortIcon('hasActivity') }}
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="shop in newShopTracking" :key="shop.shop_code"
+                <tr v-for="shop in newShopTrackingSort.sortedData.value" :key="shop.shop_code"
                     :class="{ 'warning-row': shop.currentStatus === '이용' && !shop.hasActivity }">
                   <td><code>{{ shop.shop_code }}</code></td>
                   <td>{{ shop.shop_name }}</td>
+                  <td>{{ shop.prev_company_name && shop.prev_company_name !== '-' ? shop.prev_company_name : '직영업' }}</td>
                   <td>
                     <span :class="['badge', shop.pg_yn === '선불' ? 'badge-blue' : 'badge-gray']">
                       {{ shop.pg_yn }}
@@ -1678,23 +1997,47 @@ async function handleExportHTML() {
             <table>
               <thead>
                 <tr>
-                  <th style="position: sticky; left: 0; background: var(--bg-secondary); z-index: 2;">대리점명</th>
-                  <th>전체 매장<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span></th>
-                  <th>이용<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span></th>
-                  <th>대기<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span></th>
+                  <th @click="agencyPerformanceSort.toggleSort('agencyName')" style="position: sticky; left: 0; background: var(--bg-secondary); z-index: 2; cursor: pointer;">
+                    대리점명 {{ agencyPerformanceSort.getSortIcon('agencyName') }}
+                  </th>
+                  <th @click="agencyPerformanceSort.toggleSort('totalShops')" style="cursor: pointer;">
+                    전체 매장 {{ agencyPerformanceSort.getSortIcon('totalShops') }}<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span>
+                  </th>
+                  <th @click="agencyPerformanceSort.toggleSort('activeShops')" style="cursor: pointer;">
+                    이용 {{ agencyPerformanceSort.getSortIcon('activeShops') }}<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span>
+                  </th>
+                  <th @click="agencyPerformanceSort.toggleSort('pendingShops')" style="cursor: pointer;">
+                    대기 {{ agencyPerformanceSort.getSortIcon('pendingShops') }}<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span>
+                  </th>
                   <th>선불/후불<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span></th>
-                  <th>활성화 매장<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span></th>
-                  <th style="background: var(--accent-green); color: white;">활성화율<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span></th>
-                  <th style="background: var(--accent-purple); color: white;">신규<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span></th>
-                  <th style="background: var(--accent-red); color: white;">리스크<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span></th>
-                  <th style="background: var(--accent-orange); color: white;">이탈<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span></th>
-                  <th>디바이스<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span></th>
-                  <th>평균 주문수<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span></th>
-                  <th>총 주문액<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span></th>
+                  <th @click="agencyPerformanceSort.toggleSort('activatedShops')" style="cursor: pointer;">
+                    활성화 매장 {{ agencyPerformanceSort.getSortIcon('activatedShops') }}<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span>
+                  </th>
+                  <th @click="agencyPerformanceSort.toggleSort('activationRate')" style="background: var(--accent-green); color: white; cursor: pointer;">
+                    활성화율 {{ agencyPerformanceSort.getSortIcon('activationRate') }}<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span>
+                  </th>
+                  <th @click="agencyPerformanceSort.toggleSort('newShops')" style="background: var(--accent-purple); color: white; cursor: pointer;">
+                    신규 {{ agencyPerformanceSort.getSortIcon('newShops') }}<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span>
+                  </th>
+                  <th @click="agencyPerformanceSort.toggleSort('riskShops')" style="background: var(--accent-red); color: white; cursor: pointer;">
+                    리스크 {{ agencyPerformanceSort.getSortIcon('riskShops') }}<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span>
+                  </th>
+                  <th @click="agencyPerformanceSort.toggleSort('churnedShops')" style="background: var(--accent-orange); color: white; cursor: pointer;">
+                    이탈 {{ agencyPerformanceSort.getSortIcon('churnedShops') }}<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span>
+                  </th>
+                  <th @click="agencyPerformanceSort.toggleSort('totalDevices')" style="cursor: pointer;">
+                    디바이스 {{ agencyPerformanceSort.getSortIcon('totalDevices') }}<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span>
+                  </th>
+                  <th @click="agencyPerformanceSort.toggleSort('avgOrderCount')" style="cursor: pointer;">
+                    평균 주문수 {{ agencyPerformanceSort.getSortIcon('avgOrderCount') }}<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span>
+                  </th>
+                  <th @click="agencyPerformanceSort.toggleSort('totalOrderAmount')" style="cursor: pointer;">
+                    총 주문액 {{ agencyPerformanceSort.getSortIcon('totalOrderAmount') }}<span style="font-size: 11px; display: block; font-weight: normal; opacity: 0.8;">{{ agencyFilterLabel }}</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                <template v-for="agency in filteredAgencyPerformance" :key="agency.agencyName">
+                <template v-for="agency in agencyPerformanceSort.sortedData.value" :key="agency.agencyName">
                   <tr :class="{ 'highlight-row': agency.isDirect, 'clickable-row': true }"
                       @click="toggleAgency(agency.agencyName)"
                       style="cursor: pointer;">
@@ -1756,19 +2099,35 @@ async function handleExportHTML() {
                       <table style="width: 100%; font-size: 13px;">
                         <thead>
                           <tr style="background: var(--bg-card);">
-                            <th style="padding: 8px; text-align: left;">매장코드</th>
-                            <th style="padding: 8px; text-align: left;">매장명</th>
-                            <th style="padding: 8px; text-align: center;">상태</th>
-                            <th style="padding: 8px; text-align: center;">결제</th>
+                            <th @click="toggleAgencyShopSort(agency.agencyName, 'shop_code')" style="padding: 8px; text-align: left; cursor: pointer;">
+                              매장코드 {{ getAgencyShopSortIcon(agency.agencyName, 'shop_code') }}
+                            </th>
+                            <th @click="toggleAgencyShopSort(agency.agencyName, 'shop_name')" style="padding: 8px; text-align: left; cursor: pointer;">
+                              매장명 {{ getAgencyShopSortIcon(agency.agencyName, 'shop_name') }}
+                            </th>
+                            <th @click="toggleAgencyShopSort(agency.agencyName, 'shop_status')" style="padding: 8px; text-align: center; cursor: pointer;">
+                              상태 {{ getAgencyShopSortIcon(agency.agencyName, 'shop_status') }}
+                            </th>
+                            <th @click="toggleAgencyShopSort(agency.agencyName, 'pg_yn')" style="padding: 8px; text-align: center; cursor: pointer;">
+                              선후불 {{ getAgencyShopSortIcon(agency.agencyName, 'pg_yn') }}
+                            </th>
                             <th style="padding: 8px; text-align: center;">활성화</th>
-                            <th style="padding: 8px; text-align: right;">메뉴판앱<br>주문수</th>
-                            <th style="padding: 8px; text-align: right;">디바이스</th>
-                            <th style="padding: 8px; text-align: right;">주차별<br>주문액</th>
-                            <th style="padding: 8px; text-align: left;">등록일</th>
+                            <th @click="toggleAgencyShopSort(agency.agencyName, 'order_count_no_pos')" style="padding: 8px; text-align: right; cursor: pointer;">
+                              메뉴판<br>주문수 {{ getAgencyShopSortIcon(agency.agencyName, 'order_count_no_pos') }}
+                            </th>
+                            <th @click="toggleAgencyShopSort(agency.agencyName, 'device_count')" style="padding: 8px; text-align: right; cursor: pointer;">
+                              디바이스 {{ getAgencyShopSortIcon(agency.agencyName, 'device_count') }}
+                            </th>
+                            <th @click="toggleAgencyShopSort(agency.agencyName, 'price_no_pos')" style="padding: 8px; text-align: right; cursor: pointer;">
+                              메뉴판<br>주문액 {{ getAgencyShopSortIcon(agency.agencyName, 'price_no_pos') }}
+                            </th>
+                            <th @click="toggleAgencyShopSort(agency.agencyName, 'ins_datetime')" style="padding: 8px; text-align: left; cursor: pointer;">
+                              등록일 {{ getAgencyShopSortIcon(agency.agencyName, 'ins_datetime') }}
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
-                          <tr v-for="shop in agency.shopList" :key="shop.shop_code"
+                          <tr v-for="shop in getSortedAgencyShops(agency)" :key="shop.shop_code"
                               :class="{
                                 'shop-risk': riskShopCodes.has(shop.shop_code),
                                 'shop-churned': churnedShopCodes.has(shop.shop_code)
@@ -1785,9 +2144,9 @@ async function handleExportHTML() {
                             </td>
                             <td style="padding: 8px; text-align: center;">
                               <span class="badge" :class="{
-                                'badge-blue': shop.payment_type === '선불',
-                                'badge-purple': shop.payment_type === '후불'
-                              }">{{ shop.payment_type }}</span>
+                                'badge-blue': shop.pg_yn === '선불',
+                                'badge-gray': shop.pg_yn === '후불'
+                              }">{{ shop.pg_yn }}</span>
                             </td>
                             <td style="padding: 8px; text-align: center;">
                               <span v-if="shop.order_count_no_pos >= 1" style="color: var(--accent-green);">✓</span>
@@ -1795,7 +2154,7 @@ async function handleExportHTML() {
                             </td>
                             <td style="padding: 8px; text-align: right;">{{ formatNumber(shop.order_count_no_pos) }}</td>
                             <td style="padding: 8px; text-align: right;">{{ formatNumber(shop.device_count) }}</td>
-                            <td style="padding: 8px; text-align: right;">{{ formatCurrency(shop.weekly_order_amount) }}</td>
+                            <td style="padding: 8px; text-align: right;">{{ formatCurrency(shop.price_no_pos) }}</td>
                             <td style="padding: 8px;">{{ shop.ins_datetime?.split(' ')[0] || '-' }}</td>
                           </tr>
                         </tbody>
@@ -2230,6 +2589,15 @@ th {
   color: var(--text-secondary);
   border-bottom: 1px solid var(--border-color);
   white-space: nowrap;
+  user-select: none;
+}
+
+th[style*="cursor: pointer"]:hover {
+  background: var(--bg-hover);
+}
+
+th[style*="cursor: pointer"]:active {
+  background: var(--border-color);
 }
 
 td {

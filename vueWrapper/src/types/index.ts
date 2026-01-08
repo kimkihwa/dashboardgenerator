@@ -62,6 +62,7 @@ export interface ShopAnalysis {
   pg_yn: '선불' | '후불';
   shop_status: '이용' | '이용대기' | '종료';
   ins_datetime: string;  // 최초 등록일
+  prev_company_name: string;  // 담당 대리점
 
   // 활성화 여부 분석
   hasOrders: boolean;
@@ -156,6 +157,7 @@ export interface NewShopTracking {
   shop_name: string;
   pg_yn: '선불' | '후불';
   ins_datetime: string;
+  prev_company_name: string;  // 담당 대리점
   firstSeenDate: string;  // 처음 데이터에 나타난 날짜
   currentStatus: '이용' | '이용대기' | '종료';
   statusChangedToActive: boolean;  // 이용으로 변경됨
@@ -279,7 +281,9 @@ export interface SolPayActivationStats {
 // 페이먼트 종합 현황
 export interface PaymentSummaryStats {
   kakaoPayShops: KakaoPayShopStats;
+  prevKakaoPayShops: KakaoPayShopStats; // 이전 주 매장 현황 (활성화율 변화 계산용)
   solPayShops: SolPayShopStats;
+  prevSolPayShops: SolPayShopStats; // 이전 주 매장 현황 (활성화율 변화 계산용)
   kakaoPayActivation: KakaoPayActivationStats;
   solPayActivation: SolPayActivationStats;
   // 신규 유입 & 전환

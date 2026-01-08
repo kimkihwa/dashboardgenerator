@@ -24,6 +24,7 @@ function parseCSVLine(line: string): string[] {
 
     if (char === '"') {
       inQuotes = !inQuotes;
+      // 따옴표는 제거하고 내용만 유지
     } else if (char === ',' && !inQuotes) {
       result.push(current.trim());
       current = '';
@@ -38,12 +39,13 @@ function parseCSVLine(line: string): string[] {
 
 // 안전한 값 접근 함수
 function safeGet(arr: string[], index: number, defaultValue: string = ''): string {
-  return arr[index] ?? defaultValue;
+  const value = arr[index] ?? defaultValue;
+  return value.trim();
 }
 
 function safeParseInt(value: string | undefined): number {
-  // 쉼표 제거 후 파싱 (예: "209,300" -> 209300)
-  const cleaned = (value ?? '0').replace(/,/g, '');
+  // 쉼표와 공백 제거 후 파싱 (예: "209,300 " -> 209300)
+  const cleaned = (value ?? '0').replace(/[,\s]/g, '');
   return parseInt(cleaned) || 0;
 }
 
@@ -256,10 +258,14 @@ export class DataService {
 
     const riskShops: ShopAnalysis[] = [];
     const THRESHOLD = 10;
+    const processedShops = new Set<string>();
 
     for (const order of orders) {
       // 이용 상태인 매장만
       if (order.shop_status !== '이용') continue;
+
+      // 이미 처리한 매장은 스킵
+      if (processedShops.has(order.shop_code)) continue;
 
       const recentMonthOrders = shopOrderSum.get(order.shop_code) || 0;
       const recentMonthPayments = shopPaymentSum.get(order.shop_code) || 0;
@@ -267,12 +273,14 @@ export class DataService {
 
       // 최근 한달간 주문 10건 미만 AND 결제 10건 미만
       if (recentMonthOrders < THRESHOLD && recentMonthPayments < THRESHOLD) {
+        processedShops.add(order.shop_code);
         riskShops.push({
           shop_code: order.shop_code,
           shop_name: order.shop_name,
           pg_yn: order.pg_yn,
           shop_status: order.shop_status,
           ins_datetime: order.ins_datetime,
+          prev_company_name: order.prev_company_name,
           hasOrders: recentMonthOrders > 0,
           hasPayments: recentMonthPayments > 0,
           isActive: false,
@@ -404,7 +412,7 @@ export class DataService {
       // 신규 매장 (등록일 기준 7일 이내)
       const newShops = this.findRecentlyAddedShops(date, 7).length;
 
-      // 주별 결제 집계 (해당 주차만)
+      // 주별 결제 집계 (해당 주차만) - 선불만
       let weeklyPaymentCount = 0;
       let weeklyPaymentAmount = 0;
       let weeklySolPayCount = 0;
@@ -412,16 +420,27 @@ export class DataService {
       let weeklyKakaoPayCount = 0;
       let weeklyKakaoPayAmount = 0;
 
+      // 나이스 프로모션(카카오페이) 선불 매장 코드 추출
+      const nicePayPrepaidShops = new Set(
+        orders.filter(o => o.nice_pay_promotion_yn === 'O' && o.pg_yn === '선불').map(o => o.shop_code)
+      );
+
       for (const p of dailyPayments) {
-        weeklyPaymentCount += p.count;
-        weeklyPaymentAmount += p.total_price;
-        weeklySolPayCount += p.sol_pay_count;
-        weeklySolPayAmount += p.sol_pay_amt;
-        weeklyKakaoPayCount += p.kakao_money_count;
-        weeklyKakaoPayAmount += p.kakao_money_amt;
+        if (p.pg_yn === '선불') {
+          weeklyPaymentCount += p.count;
+          weeklyPaymentAmount += p.total_price;
+          weeklySolPayCount += p.sol_pay_count;
+          weeklySolPayAmount += p.sol_pay_amt;
+          
+          // 카카오페이: 나이스 프로모션 선불 매장의 전체 결제
+          if (nicePayPrepaidShops.has(p.shop_code)) {
+            weeklyKakaoPayCount += p.count;
+            weeklyKakaoPayAmount += p.total_price;
+          }
+        }
       }
 
-      // 누적 결제 집계
+      // 누적 결제 집계 - 선불만
       let cumulativePaymentCount = 0;
       let cumulativePaymentAmount = 0;
       let cumulativeSolPayCount = 0;
@@ -430,12 +449,18 @@ export class DataService {
       let cumulativeKakaoPayAmount = 0;
 
       for (const p of cumulativePayments) {
-        cumulativePaymentCount += p.count;
-        cumulativePaymentAmount += p.total_price;
-        cumulativeSolPayCount += p.sol_pay_count;
-        cumulativeSolPayAmount += p.sol_pay_amt;
-        cumulativeKakaoPayCount += p.kakao_money_count;
-        cumulativeKakaoPayAmount += p.kakao_money_amt;
+        if (p.pg_yn === '선불') {
+          cumulativePaymentCount += p.count;
+          cumulativePaymentAmount += p.total_price;
+          cumulativeSolPayCount += p.sol_pay_count;
+          cumulativeSolPayAmount += p.sol_pay_amt;
+          
+          // 카카오페이: 나이스 프로모션 선불 매장의 전체 결제
+          if (nicePayPrepaidShops.has(p.shop_code)) {
+            cumulativeKakaoPayCount += p.count;
+            cumulativeKakaoPayAmount += p.total_price;
+          }
+        }
       }
 
       comparisons.push({
@@ -465,27 +490,32 @@ export class DataService {
     return comparisons;
   }
 
-  // 신규 매장 전환 추적 (기준날짜에서 등록일이 7일 이내인 매장)
-  trackNewShops(baseDate: string): NewShopTracking[] {
+  // 신규 매장 전환 추적 (기준날짜에서 등록일이 지정된 일수 이내인 매장)
+  trackNewShops(baseDate: string, days: number = 7): NewShopTracking[] {
     if (!baseDate) return [];
 
     const targetDate = this.parseDate(baseDate);
     if (!targetDate) return [];
 
     const cutoffDate = new Date(targetDate);
-    cutoffDate.setDate(cutoffDate.getDate() - 7);
+    cutoffDate.setDate(cutoffDate.getDate() - days);
 
     const shops = this.주문데이터.get(baseDate) || [];
     const payments = this.누적결제데이터.get(baseDate) || [];
     const paymentMap = new Map(payments.map(p => [p.shop_code, p]));
 
     const tracking: NewShopTracking[] = [];
+    const processedShops = new Set<string>();
 
     for (const shop of shops) {
+      // 이미 처리한 매장은 스킵
+      if (processedShops.has(shop.shop_code)) continue;
+
       const insDate = this.parseInsDatetime(shop.ins_datetime);
       // 등록일이 기준날짜 - 7일 이후인 매장만 (즉, 7일 이내 등록)
       if (!insDate || insDate < cutoffDate) continue;
 
+      processedShops.add(shop.shop_code);
       const payment = paymentMap.get(shop.shop_code);
 
       const totalOrderCount = Number(shop.total_count_all) || 0;
@@ -500,6 +530,7 @@ export class DataService {
         shop_name: shop.shop_name,
         pg_yn: shop.pg_yn,
         ins_datetime: shop.ins_datetime,
+        prev_company_name: shop.prev_company_name,
         firstSeenDate: baseDate,
         currentStatus: shop.shop_status,
         statusChangedToActive: shop.shop_status === '이용',
@@ -680,6 +711,20 @@ export class DataService {
       total: kakaoPayPromoShops.length
     };
 
+    // 이전 주 카카오페이 매장 현황 (활성화율 변화 계산용)
+    const prevKakaoPayPromoShops = prevOrders.filter(o => o.nice_pay_promotion_yn === 'O');
+    const prevKakaoPayShops = {
+      prepaid: {
+        pending: prevKakaoPayPromoShops.filter(o => o.pg_yn === '선불' && o.shop_status === '이용대기').length,
+        active: prevKakaoPayPromoShops.filter(o => o.pg_yn === '선불' && o.shop_status === '이용').length,
+      },
+      postpaid: {
+        pending: prevKakaoPayPromoShops.filter(o => o.pg_yn === '후불' && o.shop_status === '이용대기').length,
+        active: prevKakaoPayPromoShops.filter(o => o.pg_yn === '후불' && o.shop_status === '이용').length,
+      },
+      total: prevKakaoPayPromoShops.length
+    };
+
     // 쏠페이 매장 현황 (쏠페이 프로모션 매장)
     const solPayPromoShops = currentOrders.filter(o => o.sol_pay_promotion_yn === 'O');
     const solPayShopCodes = new Set(solPayPromoShops.map(o => o.shop_code));
@@ -691,15 +736,29 @@ export class DataService {
       total: solPayPromoShops.length
     };
 
+    // 이전 주 쏠페이 매장 현황 (활성화율 변화 계산용)
+    const prevSolPayPromoShops = prevOrders.filter(o => o.sol_pay_promotion_yn === 'O');
+    const prevSolPayShops = {
+      prepaid: {
+        pending: prevSolPayPromoShops.filter(o => o.shop_status === '이용대기').length,
+        active: prevSolPayPromoShops.filter(o => o.shop_status === '이용').length,
+      },
+      total: prevSolPayPromoShops.length
+    };
+
     // 이전 주 카카오페이 프로모션 매장 코드
     const prevKakaoPayShopCodes = new Set(prevOrders.filter(o => o.nice_pay_promotion_yn === 'O').map(o => o.shop_code));
 
-    // 카카오페이 결제 활성화 현황 (결제 데이터에서 카카오페이 프로모션 매장만 필터)
-    const currentKakaoPayPayments = currentPayments.filter(p => kakaoPayShopCodes.has(p.shop_code));
-    const prevKakaoPayPayments = prevPayments.filter(p => prevKakaoPayShopCodes.has(p.shop_code));
+    // 선불 매장 코드만 필터링
+    const kakaoPayPrepaidShopCodes = new Set(kakaoPayPromoShops.filter(o => o.pg_yn === '선불').map(o => o.shop_code));
+    const prevKakaoPayPrepaidShopCodes = new Set(prevOrders.filter(o => o.nice_pay_promotion_yn === 'O' && o.pg_yn === '선불').map(o => o.shop_code));
 
-    // 누적 카카오페이 결제
-    const currentCumulativeKakaoPay = currentCumulativePayments.filter(p => kakaoPayShopCodes.has(p.shop_code));
+    // 카카오페이 결제 활성화 현황 (결제 데이터에서 카카오페이 선불 프로모션 매장만 필터)
+    const currentKakaoPayPayments = currentPayments.filter(p => kakaoPayPrepaidShopCodes.has(p.shop_code));
+    const prevKakaoPayPayments = prevPayments.filter(p => prevKakaoPayPrepaidShopCodes.has(p.shop_code));
+
+    // 누적 카카오페이 결제 (선불만)
+    const currentCumulativeKakaoPay = currentCumulativePayments.filter(p => kakaoPayPrepaidShopCodes.has(p.shop_code));
 
     // 현재 주간 카카오페이 활성화
     const currentKakaoMoneyActivated = currentKakaoPayPayments.filter(p => p.kakao_money_count > 0);
@@ -732,24 +791,24 @@ export class DataService {
     console.log('[카카오페이 선불] 그룹핑 후 매장 수:', currentKakaoPayShopMap.size);
     console.log('[카카오페이 선불] 매장별 상세:', Array.from(currentKakaoPayShopMap.entries()).map(([code, data]) => `${code}: ${data.orderCount}건, ${data.amount}원`));
 
-    // 주간 카카오페이 집계 (매장별 합산 후 계산 - 엑셀과 동일)
+    // 주간 카카오페이 집계 (선불만)
     const currentKakaoPayStats = {
-      activatedShops: Array.from(currentKakaoPayShopMap.values()).filter(s => s.orderCount >= 1).length,
+      activatedShops: currentKakaoPayPayments.filter(p => p.count > 0).length,
       kakaoMoneyShops: currentKakaoMoneyActivated.length,
-      paymentCount: Array.from(currentKakaoPayShopMap.values()).reduce((sum, s) => sum + s.orderCount, 0),
+      paymentCount: currentKakaoPayPayments.reduce((sum, p) => sum + p.count, 0),
       kakaoMoneyCount: currentKakaoPayPayments.reduce((sum, p) => sum + p.kakao_money_count, 0),
-      paymentAmount: Array.from(currentKakaoPayShopMap.values()).filter(s => s.orderCount >= 1).reduce((sum, s) => sum + s.amount, 0),
+      paymentAmount: currentKakaoPayPayments.filter(p => p.count > 0).reduce((sum, p) => sum + p.total_price, 0),
       kakaoMoneyAmount: currentKakaoPayPayments.reduce((sum, p) => sum + p.kakao_money_amt, 0),
     };
 
-    console.log('[카카오페이 선불] 최종 결과 - 활성화:', currentKakaoPayStats.activatedShops, '결제금액:', currentKakaoPayStats.paymentAmount);
+    console.log('[카카오페이 선불] 최종 결과 - 활성화:', currentKakaoPayStats.activatedShops, '결제건수:', currentKakaoPayStats.paymentCount, '결제금액:', currentKakaoPayStats.paymentAmount);
 
     const prevKakaoPayStats = {
-      activatedShops: Array.from(prevKakaoPayShopMap.values()).filter(s => s.orderCount >= 1).length,
+      activatedShops: prevKakaoPayPayments.filter(p => p.count > 0).length,
       kakaoMoneyShops: prevKakaoMoneyActivated.length,
-      paymentCount: Array.from(prevKakaoPayShopMap.values()).reduce((sum, s) => sum + s.orderCount, 0),
+      paymentCount: prevKakaoPayPayments.reduce((sum, p) => sum + p.count, 0),
       kakaoMoneyCount: prevKakaoPayPayments.reduce((sum, p) => sum + p.kakao_money_count, 0),
-      paymentAmount: Array.from(prevKakaoPayShopMap.values()).filter(s => s.orderCount >= 1).reduce((sum, s) => sum + s.amount, 0),
+      paymentAmount: prevKakaoPayPayments.filter(p => p.count > 0).reduce((sum, p) => sum + p.total_price, 0),
       kakaoMoneyAmount: prevKakaoPayPayments.reduce((sum, p) => sum + p.kakao_money_amt, 0),
     };
 
@@ -1030,7 +1089,9 @@ export class DataService {
 
     return {
       kakaoPayShops,
+      prevKakaoPayShops,
       solPayShops,
+      prevSolPayShops,
       kakaoPayActivation,
       solPayActivation,
       newInflow,
