@@ -296,7 +296,7 @@ export interface PaymentSummaryStats {
   // 이탈 & 리스크
   churnAndRisk: {
     churnedShops: number; // 전주 활성화 → 금주 비활성화
-    churnedShopList: { shop_code: string; shop_name: string; pg_yn: string; promotion_type: string }[];
+    churnedShopList: { shop_code: string; shop_name: string; pg_yn: string; promotion_type: string; prev_company_name: string }[];
     promotionRiskShops: number; // 프로모션 대상 매장 중 리스크 매장
     promotionRiskShopList: ShopAnalysis[]; // 리스크 매장 상세 리스트
   };
